@@ -1,13 +1,66 @@
-# Python-generated files
+# OS and editor files
+.DS_Store
+**/.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python bytecode, tooling caches, and build output
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 
 # Virtual environments
-.venv
-.idea
-**/.DS_Store
-backend/storage/*
+.venv/
+venv/
+env/
+
+# Node and frontend build output
+node_modules/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+.turbo/
+
+# Local runtime data
+backend/storage/
+backend/celerybeat-schedule*
+celerybeat-schedule*
+celerybeat.pid
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+tmp/
+temp/
+.cache/
+
+# Local diff/review artifacts
+*.patch
+*.diff
+
+# Environment files with real credentials must stay out of Git.
+# The committed .env.dev must contain demo values only.
+# If you replace .env.dev with real server credentials, change these rules
+# so .env.dev is ignored, run `git rm --cached .env.dev` if Git already
+# tracks it, and check `git status` before pushing.
+.env
+.env.*
+!.env.dev
+!.env.example
+!.env.*.example
