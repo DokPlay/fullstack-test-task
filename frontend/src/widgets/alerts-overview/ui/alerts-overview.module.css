@@ -1,0 +1,11 @@
+.tableWrap {
+  overflow: auto;
+}
+
+.mono {
+  font-family: var(--font-mono), monospace;
+}
+
+.message {
+  min-width: 18rem;
+}

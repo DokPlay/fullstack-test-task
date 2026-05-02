@@ -1,0 +1,65 @@
+.tableWrap {
+  overflow: auto;
+}
+
+.table {
+  min-width: 820px;
+}
+
+.rowAccent {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.documentTitle {
+  max-width: 18rem;
+}
+
+.mono {
+  font-family: var(--font-mono), monospace;
+}
+
+.metaList {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.metaItem {
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.06);
+  padding: 0.35rem 0.65rem;
+  color: var(--app-text-secondary);
+  font-size: 0.78rem;
+}
+
+.statusStack {
+  min-width: 12rem;
+}
+
+.paginationBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-top: 1rem;
+  flex-wrap: wrap;
+}
+
+.pagination {
+  margin-left: auto;
+}
+
+@media (max-width: 575.98px) {
+  .paginationBar {
+    justify-content: center;
+  }
+
+  .paginationBar > span {
+    width: 100%;
+    text-align: center;
+  }
+
+  .pagination {
+    margin-left: 0;
+  }
+}

@@ -1,0 +1,6 @@
+.note {
+  border-radius: 1rem;
+  background:
+    linear-gradient(135deg, rgba(13, 110, 253, 0.08), rgba(13, 110, 253, 0.02));
+  color: var(--app-text-secondary);
+}

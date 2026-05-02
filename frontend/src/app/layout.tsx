@@ -1,28 +1,38 @@
 import type { Metadata } from "next";
-import 'bootstrap/dist/css/bootstrap.min.css';
-import { Container } from "react-bootstrap";
+import { IBM_Plex_Mono, Manrope } from "next/font/google";
 
-export async function generateMetadata(): Promise<Metadata> {
-  return {
-    title: 'Тестовое задание Fullstack',
-    description: 'Тестовое задание Fullstack',
-  };
-}
+import "bootstrap/dist/css/bootstrap.min.css";
+import "./globals.css";
 
-export default async function RootLayout({
-  children
+const manrope = Manrope({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-sans",
+});
+
+const ibmPlexMono = IBM_Plex_Mono({
+  subsets: ["latin", "cyrillic"],
+  variable: "--font-mono",
+  weight: ["400", "500"],
+});
+
+export const metadata: Metadata = {
+  title: "Тестовое задание Fullstack",
+  description: "Панель управления загрузкой файлов, статусами обработки и алертами.",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+  },
+};
+
+export default function RootLayout({
+  children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang='ru'>
-      <head>
-        <link rel="icon" href="/public/favicon.ico" sizes="any" />
-      </head>
-      <body>
-        <Container fluid className='p-0'>
-            {children}
-        </Container>
+    <html lang="ru">
+      <body className={`${manrope.variable} ${ibmPlexMono.variable} app-shell`}>
+        {children}
       </body>
     </html>
   );
