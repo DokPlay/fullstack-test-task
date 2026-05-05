@@ -1,46 +1,128 @@
+x-default-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   backend:
     build: ./backend
-    command: uvicorn src.app:app --host 0.0.0.0 --reload --port 8000
+    command: uvicorn src.app:app --host 0.0.0.0 --port 8000
     container_name: backend
+    restart: unless-stopped
+    logging: *default-logging
     volumes:
       - ./backend:/backend
     env_file: ".env.dev"
     ports:
       - "8000:8000"
     depends_on:
-      - backend-db
+      backend-db:
+        condition: service_healthy
+      backend-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health').read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend-worker:
     build: ./backend
-    command: [ 'celery', '-A', 'src.tasks.celery_app', 'worker', '-l', 'info' ]
+    command: [ "celery", "-A", "src.tasks.celery_app", "worker", "-l", "info", "--pool", "solo", "--concurrency", "1", "--uid", "nobody", "--gid", "nogroup" ]
     container_name: backend-worker
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      WORKER_METRICS_ENABLED: "true"
+      WORKER_METRICS_PORT: 9101
     env_file: ".env.dev"
     volumes:
       - ./backend:/backend
     depends_on:
-      - backend-db
+      backend-db:
+        condition: service_healthy
+      backend-redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9101/metrics').read()" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
-  backend-db:
-    image: postgres:latest
-    container_name: backend-db
-    ports:
-      - "5433:5433"
+  backend-beat:
+    build: ./backend
+    command: [ "celery", "-A", "src.tasks.celery_app", "beat", "-l", "info", "-s", "/tmp/celerybeat-schedule", "--uid", "nobody", "--gid", "nogroup" ]
+    container_name: backend-beat
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      WORKER_METRICS_ENABLED: "true"
+      WORKER_METRICS_PORT: 9102
     env_file: ".env.dev"
     volumes:
-      - backend-db-volume:/var/lib/postgresql
+      - ./backend:/backend
+    depends_on:
+      backend-db:
+        condition: service_healthy
+      backend-redis:
+        condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9102/metrics').read()" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend-db:
+    image: postgres:16-alpine
+    container_name: backend-db
+    restart: unless-stopped
+    logging: *default-logging
+    ports:
+      - "5433:5432"
+    env_file: ".env.dev"
+    volumes:
+      - backend-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB -p 5432" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend-redis:
-    image: redis:latest
+    image: redis:7-alpine
     container_name: backend-redis
+    restart: unless-stopped
+    logging: *default-logging
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+        NEXT_PUBLIC_MAX_UPLOAD_SIZE_BYTES: ${NEXT_PUBLIC_MAX_UPLOAD_SIZE_BYTES:-52428800}
     container_name: frontend
+    restart: unless-stopped
+    logging: *default-logging
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_MAX_UPLOAD_SIZE_BYTES: ${NEXT_PUBLIC_MAX_UPLOAD_SIZE_BYTES:-52428800}
+    depends_on:
+      backend:
+        condition: service_healthy
     ports:
       - "3000:3000"
+    healthcheck:
+      test: [ "CMD", "node", "-e", "fetch('http://127.0.0.1:3000/test').then((response) => process.exit(response.ok ? 0 : 1)).catch(() => process.exit(1))" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 volumes:
   backend-db-volume:

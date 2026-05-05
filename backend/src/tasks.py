@@ -1,13 +1,89 @@
-import asyncio
-import os
-from pathlib import Path
-from celery import Celery
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from src.models import Alert, StoredFile
-from src.service import STORAGE_DIR, DB_URL
+from __future__ import annotations
 
-REDIS_URL = os.environ.get("REDIS_URL", "redis://backend-redis:6379/0")
+import asyncio
+import logging
+import os
+
+from celery import Celery
+from prometheus_client import Counter, Gauge, start_http_server
+
+from src.core.container import ApplicationContainer, create_container
+from src.core.settings import get_settings
+from src.services.processing import FileProcessingService
+
+logger = logging.getLogger(__name__)
+
+settings = get_settings()
 _worker_loop: asyncio.AbstractEventLoop | None = None
+_worker_container: ApplicationContainer | None = None
+_metrics_started = False
+
+WORKER_METRICS_ENABLED = os.getenv("WORKER_METRICS_ENABLED", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
+WORKER_METRICS_PORT = 0
+WORKER_TASKS_IN_PROGRESS = Gauge(
+    "celery_worker_tasks_in_progress",
+    "Number of worker tasks currently being executed.",
+    ["task_name"],
+)
+WORKER_TASKS_STARTED = Counter(
+    "celery_worker_tasks_started_total",
+    "Number of started worker tasks.",
+    ["task_name"],
+)
+WORKER_TASKS_COMPLETED = Counter(
+    "celery_worker_tasks_completed_total",
+    "Number of completed worker tasks by status.",
+    ["task_name", "status"],
+)
+
+
+def _parse_worker_metrics_port() -> int:
+    raw_port = os.getenv("WORKER_METRICS_PORT", "0")
+    try:
+        port = int(raw_port)
+    except ValueError:
+        logger.warning("Invalid WORKER_METRICS_PORT value %r, metrics server disabled", raw_port)
+        return 0
+
+    if port < 0 or port > 65535:
+        logger.warning("WORKER_METRICS_PORT %s is outside TCP port range, metrics server disabled", port)
+        return 0
+
+    return port
+
+
+def _start_metrics_server() -> None:
+    global _metrics_started
+    if not WORKER_METRICS_ENABLED or _metrics_started or WORKER_METRICS_PORT <= 0:
+        return
+
+    try:
+        start_http_server(WORKER_METRICS_PORT)
+        _metrics_started = True
+    except Exception:
+        logger.exception(
+            "Failed to start worker metrics server on port %s",
+            WORKER_METRICS_PORT,
+        )
+
+
+def _run_task_with_metrics(task_name: str, coroutine):
+    WORKER_TASKS_STARTED.labels(task_name=task_name).inc()
+    WORKER_TASKS_IN_PROGRESS.labels(task_name=task_name).inc()
+    try:
+        result = run_in_worker_loop(coroutine)
+        WORKER_TASKS_COMPLETED.labels(task_name=task_name, status="success").inc()
+        return result
+    except Exception:
+        WORKER_TASKS_COMPLETED.labels(task_name=task_name, status="failed").inc()
+        raise
+    finally:
+        WORKER_TASKS_IN_PROGRESS.labels(task_name=task_name).dec()
 
 
 def run_in_worker_loop(coroutine):
@@ -18,105 +94,51 @@ def run_in_worker_loop(coroutine):
     return _worker_loop.run_until_complete(coroutine)
 
 
-celery_app = Celery("file_tasks", broker=REDIS_URL, backend=REDIS_URL)
-engine = create_async_engine(DB_URL)
-async_session_maker = async_sessionmaker(engine, expire_on_commit=False)
+def _build_celery_app() -> Celery:
+    return Celery("file_tasks", broker=settings.redis_url, backend=settings.redis_url)
 
 
-async def _scan_file_for_threats(file_id: str) -> None:
-    async with async_session_maker() as session:
-        file_item = await session.get(StoredFile, file_id)
-        if not file_item:
-            return
+WORKER_METRICS_PORT = _parse_worker_metrics_port()
+_start_metrics_server()
 
-        file_item.processing_status = "processing"
-        reasons: list[str] = []
-        extension = Path(file_item.original_name).suffix.lower()
-
-        if extension in {".exe", ".bat", ".cmd", ".sh", ".js"}:
-            reasons.append(f"suspicious extension {extension}")
-
-        if file_item.size > 10 * 1024 * 1024:
-            reasons.append("file is larger than 10 MB")
-
-        if extension == ".pdf" and file_item.mime_type not in {"application/pdf", "application/octet-stream"}:
-            reasons.append("pdf extension does not match mime type")
-
-        file_item.scan_status = "suspicious" if reasons else "clean"
-        file_item.scan_details = ", ".join(reasons) if reasons else "no threats found"
-        file_item.requires_attention = bool(reasons)
-        await session.commit()
-
-    extract_file_metadata.delay(file_id)
-
-
-async def _extract_file_metadata(file_id: str) -> None:
-    async with async_session_maker() as session:
-        file_item = await session.get(StoredFile, file_id)
-        if not file_item:
-            return
-
-        stored_path = STORAGE_DIR / file_item.stored_name
-        if not stored_path.exists():
-            file_item.processing_status = "failed"
-            file_item.scan_status = file_item.scan_status or "failed"
-            file_item.scan_details = "stored file not found during metadata extraction"
-            await session.commit()
-            send_file_alert.delay(file_id)
-            return
-
-        metadata = {
-            "extension": Path(file_item.original_name).suffix.lower(),
-            "size_bytes": file_item.size,
-            "mime_type": file_item.mime_type,
+celery_app = _build_celery_app()
+celery_app.conf.update(
+    task_track_started=True,
+    task_acks_late=True,
+    task_reject_on_worker_lost=True,
+    worker_prefetch_multiplier=1,
+    beat_schedule={
+        "recover-stuck-files": {
+            "task": "src.tasks.recover_stuck_files",
+            "schedule": settings.processing_recovery_interval_seconds,
         }
-
-        if file_item.mime_type.startswith("text/"):
-            content = stored_path.read_text(encoding="utf-8", errors="ignore")
-            metadata["line_count"] = len(content.splitlines())
-            metadata["char_count"] = len(content)
-        elif file_item.mime_type == "application/pdf":
-            content = stored_path.read_bytes()
-            metadata["approx_page_count"] = max(content.count(b"/Type /Page"), 1)
-
-        file_item.metadata_json = metadata
-        file_item.processing_status = "processed"
-        await session.commit()
-
-    send_file_alert.delay(file_id)
+    },
+    timezone="UTC",
+)
 
 
-async def _send_file_alert(file_id: str) -> None:
-    async with async_session_maker() as session:
-        file_item = await session.get(StoredFile, file_id)
-        if not file_item:
-            return
-
-        if file_item.processing_status == "failed":
-            alert = Alert(file_id=file_id, level="critical", message="File processing failed")
-        elif file_item.requires_attention:
-            alert = Alert(
-                file_id=file_id,
-                level="warning",
-                message=f"File requires attention: {file_item.scan_details}",
-            )
-        else:
-            alert = Alert(file_id=file_id, level="info", message="File processed successfully")
-
-        session.add(alert)
-        await session.commit()
+def get_worker_container() -> ApplicationContainer:
+    global _worker_container
+    if _worker_container is None:
+        _worker_container = create_container(settings=settings)
+    return _worker_container
 
 
-@celery_app.task
-def scan_file_for_threats(file_id: str) -> None:
-    run_in_worker_loop(_scan_file_for_threats(file_id))
+def get_processing_service() -> FileProcessingService:
+    return get_worker_container().processing_service
 
 
-@celery_app.task
-def extract_file_metadata(file_id: str) -> None:
-    run_in_worker_loop(_extract_file_metadata(file_id))
+@celery_app.task(name="src.tasks.process_file")
+def process_file(file_id: str) -> None:
+    _run_task_with_metrics("src.tasks.process_file", get_processing_service().process_file(file_id))
 
 
-@celery_app.task
-def send_file_alert(file_id: str) -> None:
-    run_in_worker_loop(_send_file_alert(file_id))
+@celery_app.task(name="src.tasks.recover_stuck_files")
+def recover_stuck_files() -> int:
+    recovered_file_ids = _run_task_with_metrics(
+        "src.tasks.recover_stuck_files",
+        get_processing_service().recover_stuck_files(),
+    )
+    for file_id in recovered_file_ids:
+        process_file.delay(file_id)
+    return len(recovered_file_ids)

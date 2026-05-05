@@ -2,17 +2,25 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build"
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --project tsconfig.json --pretty --noEmit",
+    "lint": "eslint . --config src/eslint.config.mjs",
+    "lint:fix": "npm run lint -- --fix"
   },
   "dependencies": {
     "bootstrap": "^5.3.8",
-    "next": "latest",
+    "next": "16.1.6",
     "react": "^18.2.0",
     "react-bootstrap": "^2.10.10",
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "eslint": "^9.16.0",
+    "eslint-config-next": "16.1.6",
     "typescript": "^5.4.0"
   }
 }
