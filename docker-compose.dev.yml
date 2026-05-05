@@ -29,10 +29,13 @@ services:
 
   backend-worker:
     build: ./backend
-    command: [ "celery", "-A", "src.tasks.celery_app", "worker", "-l", "info", "--uid", "nobody", "--gid", "nogroup" ]
+    command: [ "celery", "-A", "src.tasks.celery_app", "worker", "-l", "info", "--pool", "solo", "--concurrency", "1", "--uid", "nobody", "--gid", "nogroup" ]
     container_name: backend-worker
     restart: unless-stopped
     logging: *default-logging
+    environment:
+      WORKER_METRICS_ENABLED: "true"
+      WORKER_METRICS_PORT: 9101
     env_file: ".env.dev"
     volumes:
       - ./backend:/backend
@@ -41,6 +44,11 @@ services:
         condition: service_healthy
       backend-redis:
         condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9101/metrics').read()" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend-beat:
     build: ./backend
@@ -48,6 +56,9 @@ services:
     container_name: backend-beat
     restart: unless-stopped
     logging: *default-logging
+    environment:
+      WORKER_METRICS_ENABLED: "true"
+      WORKER_METRICS_PORT: 9102
     env_file: ".env.dev"
     volumes:
       - ./backend:/backend
@@ -56,6 +67,11 @@ services:
         condition: service_healthy
       backend-redis:
         condition: service_healthy
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9102/metrics').read()" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   backend-db:
     image: postgres:16-alpine

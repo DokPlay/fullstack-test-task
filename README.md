@@ -111,7 +111,31 @@ The `docker compose ... up` command runs in the foreground and streams logs, so 
 
 ## Additional Options
 
-Backend health check: [http://localhost:8000/health](http://localhost:8000/health)
+Backend health checks:
+
+- Liveness: [http://localhost:8000/health/live](http://localhost:8000/health/live)
+- Readiness: [http://localhost:8000/health/ready](http://localhost:8000/health/ready)
+- Legacy alias: [http://localhost:8000/health](http://localhost:8000/health)
+- Prometheus metrics: [http://localhost:8000/metrics](http://localhost:8000/metrics)
+
+Monitoring stack with Prometheus and Grafana:
+
+```bash
+docker compose -f docker-compose.dev.yml -f docker-compose.monitoring.yml --profile monitoring up -d
+docker exec -it backend alembic upgrade head
+```
+
+Monitoring URLs:
+
+- Prometheus: [http://localhost:9090](http://localhost:9090)
+- Grafana: [http://localhost:3001](http://localhost:3001)
+- Grafana login: `admin`
+- Grafana password: `admin`
+- Backend metrics: [http://localhost:8000/metrics](http://localhost:8000/metrics)
+- Worker metrics: [http://localhost:9101/metrics](http://localhost:9101/metrics)
+- Beat metrics: [http://localhost:9102/metrics](http://localhost:9102/metrics)
+
+Grafana is provisioned with the default Prometheus datasource automatically, so after login you can open Explore and run queries such as `up`, `http_requests_total`, `file_upload_total`, `file_scan_total`, or `celery_worker_tasks_completed_total`.
 
 Run in detached mode if preferred:
 
@@ -425,6 +449,8 @@ Important backend variables:
 | `DASHBOARD_EVENTS_CHANNEL` | Redis pub/sub channel for dashboard events. |
 | `DASHBOARD_EVENTS_HEARTBEAT_SECONDS` | SSE keepalive interval. |
 | `DASHBOARD_EVENTS_RETRY_TIMEOUT_MS` | Browser SSE retry hint. |
+| `WORKER_METRICS_ENABLED` | Enable `/metrics` endpoint in worker/beat (`true`/`false`). |
+| `WORKER_METRICS_PORT` | Metrics port for worker/beat metrics server (for example, `9101` and `9102`). |
 
 Frontend configuration:
 
@@ -476,16 +502,34 @@ Docker smoke checklist:
 
 - Start the stack: `docker compose -f docker-compose.dev.yml up`.
 - Run migrations in another terminal: `docker exec -it backend alembic upgrade head`.
-- Check `/health`, `/docs`, `/files`, `/alerts`, and `/events`.
+- Check `/health/live`, `/health/ready`, `/docs`, `/metrics`, `/files`, `/alerts`, and `/events`.
 - Upload a clean text file and verify it becomes `processed` and `clean`.
 - Upload a suspicious extension such as `.sh` and verify it becomes `processed` and `suspicious`.
 - Verify file download, title update, file deletion, 404 responses, and alert cascade deletion.
+- If you enabled monitoring stack:
+
+```bash
+docker compose -f docker-compose.dev.yml -f docker-compose.monitoring.yml --profile monitoring up -d
+```
+
+- Verify observability endpoints:
+
+  - Prometheus: [http://localhost:9090](http://localhost:9090)
+  - Grafana: [http://localhost:3001](http://localhost:3001), login `admin`, password `admin`
+  - Backend metrics: [http://localhost:8000/metrics](http://localhost:8000/metrics)
+  - Worker metrics: [http://localhost:9101/metrics](http://localhost:9101/metrics)
+  - Beat metrics: [http://localhost:9102/metrics](http://localhost:9102/metrics)
+
+The development Celery worker uses the `solo` pool so the embedded Prometheus endpoint reports task counters from the same process that executes jobs. For higher-throughput production workers using `prefork`, use Prometheus multiprocess mode or a dedicated Celery exporter.
 
 ## API Endpoints
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Service health check. |
+| `GET` | `/health/live` | Process liveness probe. |
+| `GET` | `/health/ready` | Dependency readiness probe for DB + Redis. |
+| `GET` | `/health` | Backward-compatible health alias. |
+| `GET` | `/metrics` | Prometheus metrics endpoint (request, DB/Redis client, and business counters). |
 | `GET` | `/files` | List uploaded files. |
 | `POST` | `/files` | Upload a file. |
 | `GET` | `/files/{file_id}` | Get one file. |

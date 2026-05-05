@@ -14,6 +14,7 @@ from src.models import Alert, ProcessingStatus, ScanStatus, StoredFile
 from src.repositories.alerts import AlertRepository
 from src.repositories.files import FileRepository
 from src.schemas import DashboardPatchEvent
+from src.monitoring import add_active_processing, count_scanned_file, count_suspicious_file
 from src.services.events import build_dashboard_patch, publish_dashboard_change_safely
 
 
@@ -41,6 +42,7 @@ class FileProcessingService:
         now = self._utcnow()
         stale_before = now - timedelta(seconds=self.settings.processing_timeout_seconds)
         started_patch: DashboardPatchEvent | None = None
+        processing_started = False
         async with self.session_factory() as session:
             file_item = await self.file_repository.claim_for_processing(
                 session,
@@ -54,6 +56,7 @@ class FileProcessingService:
             await session.commit()
             await session.refresh(file_item)
             started_patch = build_dashboard_patch("file.processing.started", file=file_item)
+            processing_started = True
 
         if started_patch is not None:
             await publish_dashboard_change_safely(
@@ -62,11 +65,16 @@ class FileProcessingService:
                 source_logger=logger,
             )
 
+        if processing_started:
+            add_active_processing(1)
         try:
             await self._process_file_pipeline(file_id)
         except Exception:
             logger.exception("Unexpected error while processing file %s", file_id)
             await self._mark_failed(file_id, "unexpected processing error")
+        finally:
+            if processing_started:
+                add_active_processing(-1)
 
     async def _process_file_pipeline(self, file_id: str | UUID) -> None:
         completion_patch: DashboardPatchEvent | None = None
@@ -113,6 +121,9 @@ class FileProcessingService:
                 file=file_item,
                 alert=alert,
             )
+            count_scanned_file()
+            if file_item.requires_attention:
+                count_suspicious_file()
 
         if completion_patch is not None:
             await publish_dashboard_change_safely(

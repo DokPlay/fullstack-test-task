@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, File, Form, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.responses import FileResponse, StreamingResponse
-from starlette import status
+from redis.asyncio import Redis
+from redis.exceptions import ConnectionError as RedisConnectionError
+from sqlalchemy import text
+from starlette import status as star_status
 
 from src.api.dependencies import AlertServiceDep, DashboardEventBusDep, FileServiceDep
 from src.api.pagination import DEFAULT_PAGE_LIMIT, PageLimit, PageOffset
@@ -12,12 +15,35 @@ from src.schemas import AlertItem, FileItem, FileUpdate
 from src.services.events import build_dashboard_snapshot
 
 
+HEALTH_READY_TIMEOUT_SECONDS = 1.0
+
+
 def build_router() -> APIRouter:
     router = APIRouter()
 
-    @router.get("/health")
-    async def healthcheck() -> dict[str, str]:
+    @router.get("/health/live")
+    async def healthcheck_live() -> dict[str, str]:
         return {"status": "ok"}
+
+    @router.get("/health/ready")
+    async def healthcheck_ready(request: Request) -> dict[str, object]:
+        container = request.app.state.container
+        database_ok, redis_ok = await asyncio.gather(
+            _check_with_timeout(_check_database_ready(container.session_factory)),
+            _check_with_timeout(_check_redis_ready(container.settings.redis_url)),
+        )
+
+        if not (database_ok and redis_ok):
+            raise HTTPException(
+                status_code=star_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"status": "unhealthy", "checks": {"database": database_ok, "redis": redis_ok}},
+            )
+
+        return {"status": "ready", "checks": {"database": True, "redis": True}}
+
+    @router.get("/health")
+    async def healthcheck(request: Request) -> dict[str, object]:
+        return await healthcheck_ready(request)
 
     @router.get("/files", response_model=list[FileItem])
     async def list_files_view(
@@ -101,3 +127,37 @@ def build_router() -> APIRouter:
         await file_service.delete_file(file_id)
 
     return router
+
+
+async def _check_database_ready(session_factory) -> bool:
+    try:
+        async with session_factory() as session:
+            await session.execute(text("SELECT 1"))
+        return True
+    except Exception:
+        return False
+
+
+async def _check_with_timeout(check) -> bool:
+    try:
+        return await asyncio.wait_for(check, timeout=HEALTH_READY_TIMEOUT_SECONDS)
+    except Exception:
+        return False
+
+
+async def _check_redis_ready(redis_url: str) -> bool:
+    client = Redis.from_url(
+        redis_url,
+        socket_connect_timeout=HEALTH_READY_TIMEOUT_SECONDS,
+        socket_timeout=HEALTH_READY_TIMEOUT_SECONDS,
+        decode_responses=True,
+    )
+    try:
+        await client.ping()
+        return True
+    except RedisConnectionError:
+        return False
+    except Exception:
+        return False
+    finally:
+        await client.aclose()

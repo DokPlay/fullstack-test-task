@@ -12,6 +12,7 @@ from src.core.pagination import DEFAULT_PAGE_LIMIT
 from src.core.settings import Settings
 from src.core.storage import LocalFileStorage, UploadSizeLimitExceededError
 from src.models import ProcessingStatus, StoredFile
+from src.monitoring import count_uploaded_file
 from src.repositories.files import FileRepository
 from src.schemas import DashboardPatchEvent
 from src.services.events import build_dashboard_patch, publish_dashboard_change_safely
@@ -96,6 +97,7 @@ class FileService:
             await self.storage.delete(stored_upload.stored_name)
             raise
 
+        count_uploaded_file()
         self._dispatch_processing(file_item.id)
         await publish_dashboard_change_safely(
             self.notify_dashboard_change,

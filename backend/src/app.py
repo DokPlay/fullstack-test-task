@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from prometheus_fastapi_instrumentator import Instrumentator
 
 from src.api.router import build_router
 from src.core.container import ApplicationContainer, create_container
@@ -32,6 +33,7 @@ def create_app(
             await resolved_container.aclose()
 
     app = FastAPI(title="Secure File Exchange", lifespan=lifespan)
+    Instrumentator().instrument(app).expose(app, include_in_schema=False)
     app.state.container = resolved_container
     app.add_middleware(
         CORSMiddleware,
